@@ -1,6 +1,6 @@
 import type http from 'node:http'
 
-import type {Locker, Upload} from './models'
+import type {Locker, Upload} from '@tus/utils'
 
 /**
  * Represents the configuration options for a server.
@@ -35,6 +35,21 @@ export type ServerOptions = {
   allowedHeaders?: string[]
 
   /**
+   * Set `Access-Control-Allow-Credentials` to true or false (the default)
+   */
+  allowedCredentials?: boolean
+
+  /**
+   * Add trusted origins to `Access-Control-Allow-Origin`.
+   */
+  allowedOrigins?: string[]
+
+  /**
+   * Interval in milliseconds for sending progress of an upload over `EVENTS.POST_RECEIVE_V2`
+   */
+  postReceiveInterval?: number
+
+  /**
    * Control how the upload URL is generated.
    * @param req - The incoming HTTP request.
    * @param options - Options for generating the URL.
@@ -48,7 +63,10 @@ export type ServerOptions = {
    * Control how the Upload-ID is extracted from the request.
    * @param req - The incoming HTTP request.
    */
-  getFileIdFromRequest?: (req: http.IncomingMessage) => string | void
+  getFileIdFromRequest?: (
+    req: http.IncomingMessage,
+    lastPath?: string
+  ) => string | undefined
 
   /**
    * Control how you want to name files.
@@ -72,6 +90,11 @@ export type ServerOptions = {
     | ((req: http.IncomingMessage) => Locker | Promise<Locker>)
 
   /**
+   * This timeout controls how long the server will wait a cancelled lock to do its cleanup.
+   */
+  lockDrainTimeout?: number
+
+  /**
    * Disallow termination for finished uploads.
    */
   disableTerminationForFinishedUploads?: boolean
@@ -90,11 +113,15 @@ export type ServerOptions = {
     req: http.IncomingMessage,
     res: http.ServerResponse,
     upload: Upload
-  ) => Promise<http.ServerResponse>
+  ) => Promise<
+    // TODO: change in the next major
+    http.ServerResponse | {res: http.ServerResponse; metadata?: Upload['metadata']}
+  >
 
   /**
    * `onUploadFinish` will be invoked after an upload is completed but before a response is returned to the client.
-   * If the function returns the (modified) response, the upload will finish.
+   * You can optionally return `status_code`, `headers` and `body` to modify the response.
+   * Note that the tus specification does not allow sending response body nor status code other than 204, but most clients support it.
    * If an error is thrown, the HTTP request will be aborted, and the provided `body` and `status_code`
    * (or their fallbacks) will be sent to the client. This can be used to implement post-processing validation.
    * @param req - The incoming HTTP request.
@@ -105,7 +132,16 @@ export type ServerOptions = {
     req: http.IncomingMessage,
     res: http.ServerResponse,
     upload: Upload
-  ) => Promise<http.ServerResponse>
+  ) => Promise<
+    // TODO: change in the next major
+    | http.ServerResponse
+    | {
+        res: http.ServerResponse
+        status_code?: number
+        headers?: Record<string, string | number>
+        body?: string
+      }
+  >
 
   /**
    * `onIncomingRequest` will be invoked when an incoming request is received.
@@ -131,9 +167,9 @@ export type ServerOptions = {
     res: http.ServerResponse,
     err: Error | {status_code: number; body: string}
   ) =>
-    | Promise<{status_code: number; body: string} | void>
+    | Promise<{status_code: number; body: string} | undefined>
     | {status_code: number; body: string}
-    | void
+    | undefined
 }
 
 export type RouteHandler = (req: http.IncomingMessage, res: http.ServerResponse) => void

@@ -1,8 +1,8 @@
 # `@tus/server`
 
-> 👉 **Note**: since 1.0.0 packages are split and published under the `@tus` scope.
-> The old package, `tus-node-server`, is considered unstable and will only receive security fixes.
-> Make sure to use the new package.
+> 👉 **Note**: since 1.0.0 packages are split and published under the `@tus` scope. The
+> old package, `tus-node-server`, is considered unstable and will only receive security
+> fixes. Make sure to use the new package.
 
 ## Contents
 
@@ -18,6 +18,7 @@
   - [Example: integrate tus into Next.js](#example-integrate-tus-into-nextjs)
   - [Example: validate metadata when an upload is created](#example-validate-metadata-when-an-upload-is-created)
   - [Example: store files in custom nested directories](#example-store-files-in-custom-nested-directories)
+  - [Example: use with Nginx](#example-use-with-nginx)
 - [Types](#types)
 - [Compatibility](#compatibility)
 - [Contribute](#contribute)
@@ -50,8 +51,9 @@ server.listen({host, port})
 
 ## API
 
-This package exports `Server` and all [`constants`][], [`types`][], [`models`][], and [`kvstores`][]. There is no default export.
-You should only need the `Server`, `EVENTS`, and KV store exports.
+This package exports `Server` and all [`constants`][], [`types`][], [`models`][], and
+[`kvstores`][]. There is no default export. You should only need the `Server`, `EVENTS`,
+and KV store exports.
 
 ### `new Server(options)`
 
@@ -63,8 +65,24 @@ The route to accept requests (`string`).
 
 #### `options.maxSize`
 
-Max file size (in bytes) allowed when uploading (`number` | (`(req, id: string | null) => Promise<number> | number`)).
-When providing a function during the OPTIONS request the id will be `null`.
+Max file size (in bytes) allowed when uploading (`number` |
+(`(req, id: string | null) => Promise<number> | number`)). When providing a function
+during the OPTIONS request the id will be `null`.
+
+#### `options.allowedCredentials`
+
+Sets `Access-Control-Allow-Credentials` (`boolean`, default: `false`).
+
+#### `options.allowedOrigins`
+
+Trusted origins (`string[]`).
+
+Sends the client's origin back in `Access-Control-Allow-Origin` if it matches.
+
+#### `options.postReceiveInterval`
+
+Interval in milliseconds for sending progress of an upload over
+[`POST_RECEIVE_V2`](#eventspost_receive_v2) (`number`).
 
 #### `options.relativeLocation`
 
@@ -72,7 +90,8 @@ Return a relative URL as the `Location` header to the client (`boolean`).
 
 #### `options.respectForwardedHeaders`
 
-Allow `Forwarded`, `X-Forwarded-Proto`, and `X-Forwarded-Host` headers to override the `Location` header returned by the server (`boolean`).
+Allow `Forwarded`, `X-Forwarded-Proto`, and `X-Forwarded-Host` headers to override the
+`Location` header returned by the server (`boolean`).
 
 #### `options.allowedHeaders`
 
@@ -82,78 +101,105 @@ Additional headers sent in `Access-Control-Allow-Headers` (`string[]`).
 
 Control how the upload URL is generated (`(req, { proto, host, path, id }) => string)`)
 
-This only changes the upload URL (`Location` header).
-If you also want to change the file name in storage use `namingFunction`.
-Returning `prefix-1234` in `namingFunction` means the `id` argument in `generateUrl` is `prefix-1234`.
+This only changes the upload URL (`Location` header). If you also want to change the file
+name in storage use `namingFunction`. Returning `prefix-1234` in `namingFunction` means
+the `id` argument in `generateUrl` is `prefix-1234`.
 
-`@tus/server` expects everything in the path after the last `/` to be the upload id.
-If you change that you have to use `getFileIdFromRequest` as well.
+`@tus/server` expects everything in the path after the last `/` to be the upload id. If
+you change that you have to use `getFileIdFromRequest` as well.
 
-A common use case of this function and `getFileIdFromRequest` is to base65 encode a complex id into the URL.
+A common use case of this function and `getFileIdFromRequest` is to base65 encode a
+complex id into the URL.
 
-> [!TIP]
-> Checkout the example how to [store files in custom nested directories](#example-store-files-in-custom-nested-directories).
+Checkout the example how to
+[store files in custom nested directories](#example-store-files-in-custom-nested-directories).
 
 #### `options.getFileIdFromRequest`
 
-Control how the Upload-ID is extracted from the request (`(req) => string | void`)
-By default, it expects everything in the path after the last `/` to be the upload id.
+Control how the Upload-ID is extracted from the request
+(`(req, lastPath) => string | void`)
 
-> [!TIP]
-> Checkout the example how to [store files in custom nested directories](#example-store-files-in-custom-nested-directories).
+By default, it expects everything in the path after the last `/` to be the upload id.
+`lastPath` is everything after the last `/`.
+
+Checkout the example how to
+[store files in custom nested directories](#example-store-files-in-custom-nested-directories).
 
 #### `options.namingFunction`
 
 Control how you want to name files (`(req, metadata) => string | Promise<string>`)
 
-In `@tus/server`, the upload ID in the URL is the same as the file name.
-This means using a custom `namingFunction` will return a different `Location` header for uploading
-and result in a different file name in storage.
+In `@tus/server`, the upload ID in the URL is the same as the file name. This means using
+a custom `namingFunction` will return a different `Location` header for uploading and
+result in a different file name in storage.
 
 It is important to make these unique to prevent data loss. Only use it if you need to.
 Default uses `crypto.randomBytes(16).toString('hex')`.
 
-> [!TIP]
-> Checkout the example how to [store files in custom nested directories](#example-store-files-in-custom-nested-directories).
+Checkout the example how to
+[store files in custom nested directories](#example-store-files-in-custom-nested-directories).
 
-#### `disableTerminationForFinishedUploads`
+#### `options.locker`
 
-Disallow the [termination extension](https://tus.io/protocols/resumable-upload#termination) for finished uploads. (`boolean`)
+The locker interface to manage locks for exclusive access control over resources
+([`Locker`][]).
+
+By default it uses an in-memory locker ([`MemoryLocker`][]) for safe concurrent access to
+uploads using a single server. When running multiple instances of the server, you need to
+provide a locker implementation that is shared between all instances (such as a
+`RedisLocker`).
+
+#### `options.disableTerminationForFinishedUploads`
+
+Disallow the
+[termination extension](https://tus.io/protocols/resumable-upload#termination) for
+finished uploads. (`boolean`)
 
 #### `options.onUploadCreate`
 
-`onUploadCreate` will be invoked before a new upload is created. (`(req, res, upload) => Promise<res>`).
+`onUploadCreate` will be invoked before a new upload is created.
+(`(req, res, upload) => Promise<{ res: http.ServerResponse, metadata?: Record<string, string>}>`).
 
-If the function returns the (modified) response, the upload will be created.
-You can `throw` an Object and the HTTP request will be aborted with the provided `body` and `status_code` (or their fallbacks).
+- If the function returns the (modified) response the upload will be created.
+- You can optionally return `metadata` which will override (not merge!) `upload.metadata`.
+- You can `throw` an Object and the HTTP request will be aborted with the provided `body`
+  and `status_code` (or their fallbacks).
 
 This can be used to implement validation of upload metadata or add headers.
 
 #### `options.onUploadFinish`
 
-`onUploadFinish` will be invoked after an upload is completed but before a response is returned to the client (`(req, res, upload) => Promise<res>`).
+`onUploadFinish` will be invoked after an upload is completed but before a response is
+returned to the client
+(`(req, res, upload) => Promise<{ res: http.ServerResponse, status_code?: number, headers?: Record<string, string | number>, body?: string }>`).
 
-If the function returns the (modified) response, the upload will finish.
-You can `throw` an Object and the HTTP request will be aborted with the provided `body` and `status_code` (or their fallbacks).
+- You can optionally return `status_code`, `headers` and `body` to modify the response.
+  Note that the tus specification does not allow sending response body nor status code
+  other than 204, but most clients support it. Use at your own risk.
+- You can `throw` an Object and the HTTP request will be aborted with the provided `body`
+  and `status_code` (or their fallbacks).
 
 This can be used to implement post-processing validation.
 
 #### `options.onIncomingRequest`
 
-`onIncomingRequest` is a middleware function invoked before all handlers (`(req, res) => Promise<void>`)
+`onIncomingRequest` is a middleware function invoked before all handlers
+(`(req, res) => Promise<void>`)
 
-This can be used for things like access control.
-You can `throw` an Object and the HTTP request will be aborted with the provided `body` and `status_code` (or their fallbacks).
+This can be used for things like access control. You can `throw` an Object and the HTTP
+request will be aborted with the provided `body` and `status_code` (or their fallbacks).
 
 #### `options.onResponseError`
 
-`onResponseError` will be invoked when an error response is about to be sent by the server.
-you use this function to map custom errors to tus errors or for custom observability. (`(req, res, err) =>  Promise<{status_code: number; body: string} | void> | {status_code: number; body: string} | void`)
+`onResponseError` will be invoked when an error response is about to be sent by the
+server. you use this function to map custom errors to tus errors or for custom
+observability.
+(`(req, res, err) => Promise<{status_code: number; body: string} | void> | {status_code: number; body: string} | void`)
 
 #### `server.handle(req, res)`
 
-The main server request handler invoked on every request.
-You only need to use this when you integrate tus into an existing Node.js server.
+The main server request handler invoked on every request. You only need to use this when
+you integrate tus into an existing Node.js server.
 
 #### `server.get(req, res)`
 
@@ -177,11 +223,13 @@ server.get('/uploads', async (req, res) => {
 
 #### `server.listen()`
 
-Start the tus server. Supported arguments are the same as [`server.listen()`](https://nodejs.org/api/net.html#serverlisten) from `node:net`.
+Start the tus server. Supported arguments are the same as
+[`server.listen()`](https://nodejs.org/api/net.html#serverlisten) from `node:net`.
 
 #### `server.cleanUpExpiredUploads()`
 
-Clean up expired uploads. Your chosen datastore must support the [expiration][] extension for this to work.
+Clean up expired uploads. Your chosen datastore must support the [expiration][] extension
+for this to work.
 
 ### `EVENTS`
 
@@ -201,12 +249,35 @@ server.on(EVENTS.POST_CREATE, (req, res, upload => {})
 
 #### `POST_RECEIVE`
 
-Called every time a `PATCH` request is handled.
+**Deprecated**.
+
+Called every time an upload finished writing to the store. This event is emitted whenever
+the request handling is completed (which is the same as `onUploadFinish`, almost the same
+as `POST_FINISH`), whereas the `POST_RECEIVE_V2` event is emitted _while_ the request is
+being handled.
 
 ```js
 const {EVENTS} = require('@tus/server')
 // ...
 server.on(EVENTS.POST_RECEIVE, (req, res, upload => {})
+```
+
+#### `POST_RECEIVE_V2`
+
+Called every [`postReceiveInterval`](#optionspostreceiveinterval) milliseconds for every
+upload while it‘s being written to the store.
+
+This means you are not guaranteed to get (all) events for an upload. For instance if
+`postReceiveInterval` is set to 1000ms and an PATCH request takes 500ms, no event is
+emitted. If the PATCH request takes 2500ms, you would get the offset at 2000ms, but not at
+2500ms.
+
+Use `POST_FINISH` if you need to know when an upload is done.
+
+```js
+const {EVENTS} = require('@tus/server')
+// ...
+server.on(EVENTS.POST_RECEIVE_V2, (req, upload => {})
 ```
 
 #### `POST_FINISH`
@@ -231,8 +302,8 @@ server.on(EVENTS.POST_TERMINATE, (req, res, id => {})
 
 ### Key-Value Stores
 
-All stores (as in the `datastore` option) save two files,
-the uploaded file and an info file with metadata, usually adjacent to each other.
+All stores (as in the `datastore` option) save two files, the uploaded file and an info
+file with metadata, usually adjacent to each other.
 
 In `@tus/file-store` the `FileKvStore` is used to persist upload info but the KV stores
 can also be used as a cache in other stores, such as `@tus/s3-store`.
@@ -271,13 +342,28 @@ import S3Store, {type MetadataValue} from '@tus/s3-store'
 import {createClient} from '@redis/client'
 
 const client = await createClient().connect()
-const path = './uploads'
 const prefix = 'foo' // prefix for the key (foo${id})
 
 new S3Store({
   // ...
   cache: new RedisKvStore<MetadataValue>(client, prefix),
 })
+```
+
+#### `IoRedisKvStore`
+
+```ts
+import { IoRedisKvStore } from '@tus/server';
+import S3Store, { type MetadataValue } from '@tus/s3-store';
+import Redis from 'ioredis';
+
+const client = new Redis();
+const prefix = 'foo'; // prefix for the key (foo${id})
+
+new S3Store({
+  // ...
+  cache: new IoRedisKvStore<MetadataValue>(client, prefix),
+});
 ```
 
 ## Examples
@@ -378,7 +464,8 @@ fastify.listen(3000, (err) => {
 
 ### Example: integrate tus into Next.js
 
-Attach the tus server handler to a Next.js route handler in an [optional catch-all route file](https://nextjs.org/docs/routing/dynamic-routes#optional-catch-all-routes)
+Attach the tus server handler to a Next.js route handler in an
+[optional catch-all route file](https://nextjs.org/docs/routing/dynamic-routes#optional-catch-all-routes)
 
 `/pages/api/upload/[[...file]].ts`
 
@@ -418,21 +505,23 @@ const {Server} = require('@tus/server')
 const server = new Server({
   // ..
   async onUploadCreate(req, res, upload) {
-    const {ok, expected, received} = validateMetadata(upload)
+    const {ok, expected, received} = validateMetadata(upload) // your logic
     if (!ok) {
       const body = `Expected "${expected}" in "Upload-Metadata" but received "${received}"`
       throw {status_code: 500, body} // if undefined, falls back to 500 with "Internal server error".
     }
-    // We have to return the (modified) response.
-    return res
+    // You can optionally return metadata to override the upload metadata,
+    // such as `{ storagePath: "/upload/123abc..." }`
+    const extraMeta = getExtraMetadata(req) // your logic
+    return {res, metadata: {...upload.metadata, ...extraMeta}}
   },
 })
 ```
 
 ### Example: access control
 
-Access control is opinionated and can be done in different ways.
-This example is psuedo-code for what it could look like with JSON Web Tokens.
+Access control is opinionated and can be done in different ways. This example is
+psuedo-code for what it could look like with JSON Web Tokens.
 
 ```js
 const {Server} = require('@tus/server')
@@ -463,12 +552,12 @@ const server = new Server({
 
 ### Example: store files in custom nested directories
 
-You can use `namingFunction` to change the name of the stored file.
-If you’re only adding a prefix or suffix without a slash (`/`),
-you don’t need to implement `generateUrl` and `getFileIdFromRequest`.
+You can use `namingFunction` to change the name of the stored file. If you’re only adding
+a prefix or suffix without a slash (`/`), you don’t need to implement `generateUrl` and
+`getFileIdFromRequest`.
 
-Adding a slash means you create a new directory, for which you need
-to implement all three functions as we need encode the id with base64 into the URL.
+Adding a slash means you create a new directory, for which you need to implement all three
+functions as we need encode the id with base64 into the URL.
 
 ```js
 const path = '/files'
@@ -484,19 +573,57 @@ const server = new Server({
     id = Buffer.from(id, 'utf-8').toString('base64url')
     return `${proto}://${host}${path}/${id}`
   },
-  getFileIdFromRequest(req) {
-    const reExtractFileID = /([^/]+)\/?$/
-    const match = reExtractFileID.exec(req.url as string)
-
-    if (!match || path.includes(match[1])) {
-      return
-    }
-
-    return Buffer.from(match[1], 'base64url').toString('utf-8')
+  getFileIdFromRequest(req, lastPath) {
+    // lastPath is everything after the last `/`
+    // If your custom URL is different, this might be undefined
+    // and you need to extract the ID yourself
+    return Buffer.from(lastPath, 'base64url').toString('utf-8')
   },
 })
-
 ```
+
+### Example: use with Nginx
+
+In some cases, it is necessary to run behind a reverse proxy (Nginx, HAProxy etc), for
+example for TLS termination or serving multiple services on the same hostname. To properly
+do this, `@tus/server` and the proxy must be configured appropriately.
+
+Firstly, you must set `respectForwardedHeaders` indicating that a reverse proxy is in use
+and that it should respect the `X-Forwarded-*`/`Forwarded` headers:
+
+```js
+const {Server} = require('@tus/server')
+// ...
+
+const server = new Server({
+  // ..
+  respectForwardedHeaders: true,
+})
+```
+
+Secondly, some of the reverse proxy's settings should be adjusted. The exact steps depend
+on the used proxy, but the following points should be checked:
+
+- _Disable request buffering._ Nginx, for example, reads the entire incoming HTTP request,
+  including its body, before sending it to the backend, by default. This behavior defeats
+  the purpose of resumability where an upload is processed and saved while it's being
+  transferred, allowing it be resumed. Therefore, such a feature must be disabled.
+
+- _Adjust maximum request size._ Some proxies have default values for how big a request
+  may be in order to protect your services. Be sure to check these settings to match the
+  requirements of your application.
+
+- _Forward hostname and scheme._ If the proxy rewrites the request URL, the tusd server
+  does not know the original URL which was used to reach the proxy. This behavior can lead
+  to situations, where tusd returns a redirect to a URL which can not be reached by the
+  client. To avoid this issue, you can explicitly tell tusd which hostname and scheme to
+  use by supplying the `X-Forwarded-Host` and `X-Forwarded-Proto` headers. Configure the
+  proxy to set these headers to the original hostname and protocol when forwarding
+  requests to tusd.
+
+You can also take a look at the
+[Nginx configuration from tusd](https://github.com/tus/tusd/blob/main/examples/nginx.conf)
+which is used to power the [tusd.tusdemo.net](https://tusd.tusdemo.net) instance.
 
 ## Types
 
@@ -508,17 +635,26 @@ This package requires Node.js 16.0+.
 
 ## Contribute
 
-See [`contributing.md`](https://github.com/tus/tus-node-server/blob/main/.github/contributing.md).
+See
+[`contributing.md`](https://github.com/tus/tus-node-server/blob/main/.github/contributing.md).
 
 ## License
 
-[MIT](https://github.com/tus/tus-node-server/blob/master/license) © [tus](https://github.com/tus)
+[MIT](https://github.com/tus/tus-node-server/blob/master/license) ©
+[tus](https://github.com/tus)
 
 [`@tus/file-store`]: https://github.com/tus/tus-node-server/tree/main/packages/file-store
 [`@tus/s3-store`]: https://github.com/tus/tus-node-server/tree/main/packages/s3-store
 [`@tus/gcs-store`]: https://github.com/tus/tus-node-server/tree/main/packages/gcs-store
-[`constants`]: https://github.com/tus/tus-node-server/blob/main/packages/server/src/constants.ts
+[`constants`]:
+  https://github.com/tus/tus-node-server/blob/main/packages/utils/src/constants.ts
 [`types`]: https://github.com/tus/tus-node-server/blob/main/packages/server/src/types.ts
-[`models`]: https://github.com/tus/tus-node-server/blob/main/packages/server/src/models/index.ts
-[`kvstores`]: https://github.com/tus/tus-node-server/blob/main/packages/server/src/kvstores/index.ts
+[`models`]:
+  https://github.com/tus/tus-node-server/blob/main/packages/utils/src/models/index.ts
+[`kvstores`]:
+  https://github.com/tus/tus-node-server/blob/main/packages/utils/src/kvstores/index.ts
 [expiration]: https://tus.io/protocols/resumable-upload.html#expiration
+[`Locker`]:
+  https://github.com/tus/tus-node-server/blob/main/packages/utils/src/models/Locker.ts
+[`MemoryLocker`]:
+  https://github.com/tus/tus-node-server/blob/main/packages/server/src/lockers/MemoryLocker.ts

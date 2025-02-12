@@ -1,13 +1,19 @@
 import debug from 'debug'
 
 import {BaseHandler} from './BaseHandler'
-import {Upload, Uid, Metadata} from '../models'
+import {
+  Upload,
+  Uid,
+  Metadata,
+  EVENTS,
+  ERRORS,
+  type DataStore,
+  type CancellationContext,
+} from '@tus/utils'
 import {validateHeader} from '../validators/HeaderValidator'
-import {EVENTS, ERRORS} from '../constants'
 
 import type http from 'node:http'
 import type {ServerOptions, WithRequired} from '../types'
-import {DataStore, CancellationContext} from '../models'
 
 const log = debug('tus-node-server:handlers:post')
 
@@ -54,7 +60,7 @@ export class PostHandler extends BaseHandler {
       throw ERRORS.INVALID_LENGTH
     }
 
-    let metadata
+    let metadata: ReturnType<(typeof Metadata)['parse']> | undefined
     if ('upload-metadata' in req.headers) {
       try {
         metadata = Metadata.parse(upload_metadata)
@@ -63,7 +69,7 @@ export class PostHandler extends BaseHandler {
       }
     }
 
-    let id
+    let id: string
     try {
       id = await this.options.namingFunction(req, metadata)
     } catch (error) {
@@ -94,7 +100,23 @@ export class PostHandler extends BaseHandler {
 
     if (this.options.onUploadCreate) {
       try {
-        res = await this.options.onUploadCreate(req, res, upload)
+        const resOrObject = await this.options.onUploadCreate(req, res, upload)
+        // Backwards compatibility, remove in next major
+        // Ugly check because we can't use `instanceof` because we mock the instance in tests
+        if (
+          typeof (resOrObject as http.ServerResponse).write === 'function' &&
+          typeof (resOrObject as http.ServerResponse).writeHead === 'function'
+        ) {
+          res = resOrObject as http.ServerResponse
+        } else {
+          // Ugly types because TS only understands instanceof
+          type ExcludeServerResponse<T> = T extends http.ServerResponse ? never : T
+          const obj = resOrObject as ExcludeServerResponse<typeof resOrObject>
+          res = obj.res
+          if (obj.metadata) {
+            upload.metadata = obj.metadata
+          }
+        }
       } catch (error) {
         log(`onUploadCreate error: ${error.body}`)
         throw error
@@ -105,9 +127,12 @@ export class PostHandler extends BaseHandler {
 
     let isFinal: boolean
     let url: string
-    let headers: {
-      'Upload-Offset'?: string
-      'Upload-Expires'?: string
+
+    //Recommended response defaults
+    const responseData = {
+      status: 201,
+      headers: {} as Record<string, string | number>,
+      body: '',
     }
 
     try {
@@ -117,14 +142,13 @@ export class PostHandler extends BaseHandler {
       this.emit(EVENTS.POST_CREATE, req, res, upload, url)
 
       isFinal = upload.size === 0 && !upload.sizeIsDeferred
-      headers = {}
 
       // The request MIGHT include a Content-Type header when using creation-with-upload extension
       if (validateHeader('content-type', req.headers['content-type'])) {
         const bodyMaxSize = await this.calculateMaxBodySize(req, upload, maxFileSize)
-        const newOffset = await this.writeToStore(req, id, 0, bodyMaxSize, context)
+        const newOffset = await this.writeToStore(req, upload, bodyMaxSize, context)
 
-        headers['Upload-Offset'] = newOffset.toString()
+        responseData.headers['Upload-Offset'] = newOffset.toString()
         isFinal = newOffset === Number.parseInt(upload_length as string, 10)
         upload.offset = newOffset
       }
@@ -137,7 +161,24 @@ export class PostHandler extends BaseHandler {
 
     if (isFinal && this.options.onUploadFinish) {
       try {
-        res = await this.options.onUploadFinish(req, res, upload)
+        const resOrObject = await this.options.onUploadFinish(req, res, upload)
+        // Backwards compatibility, remove in next major
+        // Ugly check because we can't use `instanceof` because we mock the instance in tests
+        if (
+          typeof (resOrObject as http.ServerResponse).write === 'function' &&
+          typeof (resOrObject as http.ServerResponse).writeHead === 'function'
+        ) {
+          res = resOrObject as http.ServerResponse
+        } else {
+          // Ugly types because TS only understands instanceof
+          type ExcludeServerResponse<T> = T extends http.ServerResponse ? never : T
+          const obj = resOrObject as ExcludeServerResponse<typeof resOrObject>
+          res = obj.res
+          if (obj.status_code) responseData.status = obj.status_code
+          if (obj.body) responseData.body = obj.body
+          if (obj.headers)
+            responseData.headers = Object.assign(obj.headers, responseData.headers)
+        }
       } catch (error) {
         log(`onUploadFinish: ${error.body}`)
         throw error
@@ -156,13 +197,26 @@ export class PostHandler extends BaseHandler {
       if (created.offset !== Number.parseInt(upload_length as string, 10)) {
         const creation = new Date(upload.creation_date)
         // Value MUST be in RFC 7231 datetime format
-        headers['Upload-Expires'] = new Date(
+        responseData.headers['Upload-Expires'] = new Date(
           creation.getTime() + this.store.getExpiration()
         ).toUTCString()
       }
     }
 
-    const writtenRes = this.write(res, 201, {Location: url, ...headers})
+    //Only append Location header if its valid for the final http status (201 or 3xx)
+    if (
+      responseData.status === 201 ||
+      (responseData.status >= 300 && responseData.status < 400)
+    ) {
+      responseData.headers.Location = url
+    }
+
+    const writtenRes = this.write(
+      res,
+      responseData.status,
+      responseData.headers,
+      responseData.body
+    )
 
     if (isFinal) {
       this.emit(EVENTS.POST_FINISH, req, writtenRes, upload)

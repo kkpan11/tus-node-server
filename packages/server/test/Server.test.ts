@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
 /* eslint-disable no-throw-literal */
 import 'should'
 
@@ -7,20 +8,24 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import request from 'supertest'
+import Throttle from 'throttle'
 
 import {Server} from '../src'
 import {FileStore} from '@tus/file-store'
-import {DataStore} from '../src/models'
-import {TUS_RESUMABLE, EVENTS} from '../src/constants'
+import {TUS_RESUMABLE, EVENTS, DataStore, Metadata} from '@tus/utils'
 import httpMocks from 'node-mocks-http'
 import sinon from 'sinon'
 
 // Test server crashes on http://{some-ip} so we remove the protocol...
 const removeProtocol = (location: string) => location.slice(6)
+const directory = path.resolve(__dirname, 'output', 'server')
 
 describe('Server', () => {
+  before(async () => {
+    await fs.mkdir(directory, {recursive: true})
+  })
   after(async () => {
-    await fs.rm(path.resolve(__dirname, 'output'), {force: true, recursive: true})
+    await fs.rm(directory, {force: true, recursive: true})
   })
 
   describe('instantiation', () => {
@@ -121,7 +126,7 @@ describe('Server', () => {
     before(() => {
       server = new Server({
         path: '/test/output',
-        datastore: new FileStore({directory: './test/output'}),
+        datastore: new FileStore({directory}),
       })
       listener = server.listen()
     })
@@ -156,6 +161,19 @@ describe('Server', () => {
           res.headers.should.have.property('access-control-allow-headers')
           res.headers['access-control-allow-headers'].should.containEql('Custom-Header')
           server.options.allowedHeaders = []
+          done(err)
+        })
+    })
+
+    it('OPTIONS should return returns custom headers in Access-Control-Allow-Credentials', (done) => {
+      server.options.allowedCredentials = true
+
+      request(listener)
+        .options('/')
+        .expect(204, '', (err, res) => {
+          res.headers.should.have.property('access-control-allow-credentials')
+          res.headers['access-control-allow-credentials'].should.containEql('true')
+          server.options.allowedCredentials = undefined
           done(err)
         })
     })
@@ -247,7 +265,7 @@ describe('Server', () => {
       done()
     })
 
-    it('should allow overriding the HTTP method', async () => {
+    it('should allow overriding the HTTP origin', async () => {
       const origin = 'vimeo.com'
       const req = httpMocks.createRequest({
         headers: {origin},
@@ -260,10 +278,68 @@ describe('Server', () => {
       assert.equal(res.hasHeader('Access-Control-Allow-Origin'), true)
     })
 
+    it('should allow overriding the HTTP origin only if match allowedOrigins', async () => {
+      const origin = 'vimeo.com'
+      server.options.allowedOrigins = ['vimeo.com']
+      const req = httpMocks.createRequest({
+        headers: {origin},
+        method: 'OPTIONS',
+        url: '/',
+      })
+      // @ts-expect-error todo
+      const res = new http.ServerResponse({method: 'OPTIONS'})
+      await server.handle(req, res)
+      assert.equal(res.hasHeader('Access-Control-Allow-Origin'), true)
+      assert.equal(res.getHeader('Access-Control-Allow-Origin'), 'vimeo.com')
+    })
+
+    it('should allow overriding the HTTP origin only if match allowedOrigins with multiple allowed domains', async () => {
+      const origin = 'vimeo.com'
+      server.options.allowedOrigins = ['google.com', 'vimeo.com']
+      const req = httpMocks.createRequest({
+        headers: {origin},
+        method: 'OPTIONS',
+        url: '/',
+      })
+      // @ts-expect-error todo
+      const res = new http.ServerResponse({method: 'OPTIONS'})
+      await server.handle(req, res)
+      assert.equal(res.hasHeader('Access-Control-Allow-Origin'), true)
+      assert.equal(res.getHeader('Access-Control-Allow-Origin'), 'vimeo.com')
+    })
+
+    it(`should now allow overriding the HTTP origin if doesn't match allowedOrigins`, async () => {
+      const origin = 'vimeo.com'
+      server.options.allowedOrigins = ['google.com']
+      const req = httpMocks.createRequest({
+        headers: {origin},
+        method: 'OPTIONS',
+        url: '/',
+      })
+      // @ts-expect-error todo
+      const res = new http.ServerResponse({method: 'OPTIONS'})
+      await server.handle(req, res)
+      assert.equal(res.hasHeader('Access-Control-Allow-Origin'), true)
+      assert.equal(res.getHeader('Access-Control-Allow-Origin'), 'google.com')
+    })
+
+    it('should return Access-Control-Allow-Origin if no origin header', async () => {
+      server.options.allowedOrigins = ['google.com']
+      const req = httpMocks.createRequest({
+        method: 'OPTIONS',
+        url: '/',
+      })
+      // @ts-expect-error todo
+      const res = new http.ServerResponse({method: 'OPTIONS'})
+      await server.handle(req, res)
+      assert.equal(res.hasHeader('Access-Control-Allow-Origin'), true)
+      assert.equal(res.getHeader('Access-Control-Allow-Origin'), 'google.com')
+    })
+
     it('should not invoke handlers if onIncomingRequest throws', (done) => {
       const server = new Server({
         path: '/test/output',
-        datastore: new FileStore({directory: './test/output'}),
+        datastore: new FileStore({directory}),
         async onIncomingRequest() {
           throw {status_code: 403, body: 'Access denied'}
         },
@@ -282,23 +358,20 @@ describe('Server', () => {
       const route = '/test/output'
       const server = new Server({
         path: route,
-        datastore: new FileStore({directory: './test/output'}),
+        datastore: new FileStore({directory}),
         namingFunction() {
-          return `foo/bar/id`
+          return 'foo/bar/id'
         },
         generateUrl(_, {proto, host, path, id}) {
           id = Buffer.from(id, 'utf-8').toString('base64url')
           return `${proto}://${host}${path}/${id}`
         },
-        getFileIdFromRequest(req) {
-          const reExtractFileID = /([^/]+)\/?$/
-          const match = reExtractFileID.exec(req.url as string)
-
-          if (!match || route.includes(match[1])) {
+        getFileIdFromRequest(req, lastPath) {
+          if (!lastPath) {
             return
           }
 
-          return Buffer.from(match[1], 'base64url').toString('utf-8')
+          return Buffer.from(lastPath, 'base64url').toString('utf-8')
         },
       })
       const length = Buffer.byteLength('test', 'utf8').toString()
@@ -308,7 +381,6 @@ describe('Server', () => {
         .set('Tus-Resumable', TUS_RESUMABLE)
         .set('Upload-Length', length)
         .then((res) => {
-          console.log(res.headers.location)
           request(s)
             .patch(removeProtocol(res.headers.location))
             .send('test')
@@ -330,7 +402,7 @@ describe('Server', () => {
     beforeEach(() => {
       server = new Server({
         path: '/test/output',
-        datastore: new FileStore({directory: './test/output'}),
+        datastore: new FileStore({directory}),
       })
       listener = server.listen()
     })
@@ -378,6 +450,46 @@ describe('Server', () => {
         })
     })
 
+    it('should receive throttled POST_RECEIVE event', (done) => {
+      const server = new Server({
+        path: '/test/output',
+        datastore: new FileStore({directory}),
+        postReceiveInterval: 500,
+      })
+      const size = 1024 * 1024
+      let received = 0
+      server.on(EVENTS.POST_RECEIVE_V2, () => {
+        received++
+      })
+
+      const originalWrite = server.datastore.write.bind(server.datastore)
+      // Slow down writing
+      sinon.stub(server.datastore, 'write').callsFake((stream, ...args) => {
+        // bytes per second a bit slower than exactly 2s so we can test getting four events
+        const throttleStream = new Throttle({bps: size / 2 - size / 10})
+        return originalWrite(stream.pipe(throttleStream), ...args)
+      })
+
+      const data = Buffer.alloc(size, 'a')
+
+      request(server.listen())
+        .post(server.options.path)
+        .set('Tus-Resumable', TUS_RESUMABLE)
+        .set('Upload-Length', data.byteLength.toString())
+        .then((res) => {
+          request(server.listen())
+            .patch(removeProtocol(res.headers.location))
+            .send(data)
+            .set('Tus-Resumable', TUS_RESUMABLE)
+            .set('Upload-Offset', '0')
+            .set('Content-Type', 'application/offset+octet-stream')
+            .end((err) => {
+              assert.ok(received >= 4, 'should have received 4 or more events')
+              done(err)
+            })
+        })
+    })
+
     it('should fire when an upload is finished', (done) => {
       const length = Buffer.byteLength('test', 'utf8').toString()
       server.on(EVENTS.POST_FINISH, (req, res, upload) => {
@@ -408,7 +520,7 @@ describe('Server', () => {
     it('should call onUploadCreate and return its error to the client', (done) => {
       const server = new Server({
         path: '/test/output',
-        datastore: new FileStore({directory: './test/output'}),
+        datastore: new FileStore({directory}),
         async onUploadCreate() {
           throw {body: 'no', status_code: 500}
         },
@@ -420,11 +532,42 @@ describe('Server', () => {
         .expect(500, 'no', done)
     })
 
+    it('should allow metadata to be changed in onUploadCreate', (done) => {
+      const filename = 'foo.txt'
+      const server = new Server({
+        path: '/test/output',
+        datastore: new FileStore({directory}),
+        async onUploadCreate(_, res, upload) {
+          const metadata = {...upload.metadata, filename}
+          return {res, metadata}
+        },
+      })
+      const s = server.listen()
+      request(s)
+        .post(server.options.path)
+        .set('Tus-Resumable', TUS_RESUMABLE)
+        .set('Upload-Length', '4')
+        .expect(201)
+        .then((res) => {
+          request(s)
+            .head(removeProtocol(res.headers.location))
+            .set('Tus-Resumable', TUS_RESUMABLE)
+            .expect(200)
+            .then((r) => {
+              const metadata = Metadata.parse(r.headers['upload-metadata'])
+              assert.equal(metadata.filename, filename)
+              done()
+            })
+        })
+    })
+
     it('should call onUploadFinish and return its error to the client', (done) => {
       const server = new Server({
         path: '/test/output',
-        datastore: new FileStore({directory: './test/output'}),
-        onUploadFinish() {
+        datastore: new FileStore({directory}),
+        onUploadFinish(_, __, upload) {
+          assert.ok(upload.storage?.path, 'should have storage.path')
+          assert.ok(upload.storage?.type, 'should have storage.type')
           throw {body: 'no', status_code: 500}
         },
       })
@@ -446,7 +589,7 @@ describe('Server', () => {
     it('should call onUploadFinish and return its error to the client with creation-with-upload ', (done) => {
       const server = new Server({
         path: '/test/output',
-        datastore: new FileStore({directory: './test/output'}),
+        datastore: new FileStore({directory}),
         async onUploadFinish() {
           throw {body: 'no', status_code: 500}
         },
@@ -459,6 +602,40 @@ describe('Server', () => {
         .set('Content-Type', 'application/offset+octet-stream')
         .send('test')
         .expect(500, 'no', done)
+    })
+
+    it('should allow response to be changed in onUploadFinish', (done) => {
+      const server = new Server({
+        path: '/test/output',
+        datastore: new FileStore({directory}),
+        async onUploadFinish(_, res) {
+          return {
+            res,
+            status_code: 200,
+            body: '{ fileProcessResult: 12 }',
+            headers: {'X-TestHeader': '1'},
+          }
+        },
+      })
+
+      request(server.listen())
+        .post(server.options.path)
+        .set('Tus-Resumable', TUS_RESUMABLE)
+        .set('Upload-Length', '4')
+        .then((res) => {
+          request(server.listen())
+            .patch(removeProtocol(res.headers.location))
+            .send('test')
+            .set('Tus-Resumable', TUS_RESUMABLE)
+            .set('Upload-Offset', '0')
+            .set('Content-Type', 'application/offset+octet-stream')
+            .expect(200, '{ fileProcessResult: 12 }')
+            .then((r) => {
+              assert.equal(r.headers['upload-offset'], '4')
+              assert.equal(r.headers['x-testheader'], '1')
+              done()
+            })
+        })
     })
 
     it('should fire when an upload is finished with upload-defer-length', (done) => {
@@ -493,7 +670,7 @@ describe('Server', () => {
       const spy = sinon.spy()
       const server = new Server({
         path: '/test/output',
-        datastore: new FileStore({directory: './test/output'}),
+        datastore: new FileStore({directory}),
         onResponseError: () => {
           spy()
           return {status_code: 404, body: 'custom-error'}

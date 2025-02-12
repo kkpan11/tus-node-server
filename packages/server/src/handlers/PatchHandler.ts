@@ -1,10 +1,9 @@
 import debug from 'debug'
 
 import {BaseHandler} from './BaseHandler'
-import {ERRORS, EVENTS} from '../constants'
 
 import type http from 'node:http'
-import {CancellationContext, Upload} from '../models'
+import {ERRORS, EVENTS, type CancellationContext, type Upload} from '@tus/utils'
 
 const log = debug('tus-node-server:handlers:patch')
 
@@ -101,27 +100,47 @@ export class PatchHandler extends BaseHandler {
         }
 
         const maxBodySize = await this.calculateMaxBodySize(req, upload, maxFileSize)
-        newOffset = await this.writeToStore(req, id, offset, maxBodySize, context)
+        newOffset = await this.writeToStore(req, upload, maxBodySize, context)
       } finally {
         await lock.unlock()
       }
 
       upload.offset = newOffset
       this.emit(EVENTS.POST_RECEIVE, req, res, upload)
+
+      //Recommended response defaults
+      const responseData = {
+        status: 204,
+        headers: {
+          'Upload-Offset': newOffset,
+        } as Record<string, string | number>,
+        body: '',
+      }
+
       if (newOffset === upload.size && this.options.onUploadFinish) {
         try {
-          res = await this.options.onUploadFinish(req, res, upload)
+          const resOrObject = await this.options.onUploadFinish(req, res, upload)
+          // Backwards compatibility, remove in next major
+          // Ugly check because we can't use `instanceof` because we mock the instance in tests
+          if (
+            typeof (resOrObject as http.ServerResponse).write === 'function' &&
+            typeof (resOrObject as http.ServerResponse).writeHead === 'function'
+          ) {
+            res = resOrObject as http.ServerResponse
+          } else {
+            // Ugly types because TS only understands instanceof
+            type ExcludeServerResponse<T> = T extends http.ServerResponse ? never : T
+            const obj = resOrObject as ExcludeServerResponse<typeof resOrObject>
+            res = obj.res
+            if (obj.status_code) responseData.status = obj.status_code
+            if (obj.body) responseData.body = obj.body
+            if (obj.headers)
+              responseData.headers = Object.assign(obj.headers, responseData.headers)
+          }
         } catch (error) {
           log(`onUploadFinish: ${error.body}`)
           throw error
         }
-      }
-
-      const headers: {
-        'Upload-Offset': number
-        'Upload-Expires'?: string
-      } = {
-        'Upload-Offset': newOffset,
       }
 
       if (
@@ -135,11 +154,16 @@ export class PatchHandler extends BaseHandler {
         const dateString = new Date(
           creation.getTime() + this.store.getExpiration()
         ).toUTCString()
-        headers['Upload-Expires'] = dateString
+        responseData.headers['Upload-Expires'] = dateString
       }
 
       // The Server MUST acknowledge successful PATCH requests with the 204
-      const writtenRes = this.write(res, 204, headers)
+      const writtenRes = this.write(
+        res,
+        responseData.status,
+        responseData.headers,
+        responseData.body
+      )
 
       if (newOffset === upload.size) {
         this.emit(EVENTS.POST_FINISH, req, writtenRes, upload)

@@ -1,12 +1,11 @@
 import {strict as assert} from 'node:assert'
-import http from 'node:http'
+import type http from 'node:http'
 
 import sinon from 'sinon'
 import httpMocks from 'node-mocks-http'
 
-import {DataStore, Upload, CancellationContext} from '../src/models'
+import {ERRORS, DataStore, Upload, type CancellationContext} from '@tus/utils'
 import {HeadHandler} from '../src/handlers/HeadHandler'
-import {ERRORS} from '../src/constants'
 import {MemoryLocker} from '../src'
 
 describe('HeadHandler', () => {

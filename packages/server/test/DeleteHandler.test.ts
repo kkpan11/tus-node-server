@@ -6,10 +6,8 @@ import type http from 'node:http'
 import sinon from 'sinon'
 import httpMocks from 'node-mocks-http'
 
-import {DataStore} from '../src/models/DataStore'
+import {ERRORS, EVENTS, DataStore, type CancellationContext} from '@tus/utils'
 import {DeleteHandler} from '../src/handlers/DeleteHandler'
-import {ERRORS, EVENTS} from '../src/constants'
-import {CancellationContext} from '../src/models'
 import {MemoryLocker} from '../src'
 
 describe('DeleteHandler', () => {
@@ -81,6 +79,7 @@ describe('DeleteHandler', () => {
       creation_date: undefined,
       offset: 1000,
       size: 1000,
+      storage: {type: 'test', path: `${path}/abc`},
     })
     await assert.rejects(() => handler.send(req, res, context), {status_code: 400})
   })

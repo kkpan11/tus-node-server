@@ -1,29 +1,22 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "private": true,
-  "workspaces": [
-    "packages/*",
-    "demo",
-    "test"
-  ],
+  "workspaces": ["packages/*", "test"],
   "scripts": {
-    "build": "turbo run build",
-    "demo": "yarn workspace demo start",
-    "demo:gcs": "yarn workspace demo start:gcs",
-    "demo:s3": "yarn workspace demo start:s3",
-    "lint": "turbo run lint",
-    "format": "turbo run format",
-    "test": "turbo run test --concurrency 1",
+    "build": "tsc --build",
+    "lint": "biome lint --write .",
+    "format": "biome format --write .",
+    "format:check": "biome format --error-on-warnings .",
+    "pretest": "tsc --build",
+    "test": "npm test -w ./packages",
+    "version": "changeset version",
     "release": "gh workflow run release",
-    "release:local": "turbo run build && changesets publish"
+    "release:local": "npm run build && changeset publish"
   },
   "devDependencies": {
-    "@changesets/cli": "^2.27.1",
-    "eslint": "^8.56.0",
-    "eslint-config-custom": "workspace:*",
-    "eslint-plugin-prettier": "^4.2.1",
-    "prettier": "^2.8.8",
-    "turbo": "^1.11.3"
-  },
-  "packageManager": "yarn@4.0.2+sha256.825003a0f561ad09a3b1ac4a3b3ea6207af2796d54f62a9420520915721f5186"
+    "@biomejs/biome": "1.9.4",
+    "@changesets/changelog-github": "^0.5.0",
+    "@changesets/cli": "^2.27.10",
+    "typescript": "^5.6.2"
+  }
 }

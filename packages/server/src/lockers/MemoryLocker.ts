@@ -1,5 +1,4 @@
-import {ERRORS} from '../constants'
-import {Lock, Locker, RequestRelease} from '../models'
+import {ERRORS, type Lock, type Locker, type RequestRelease} from '@tus/utils'
 
 /**
  * MemoryLocker is an implementation of the Locker interface that manages locks in memory.
@@ -50,17 +49,25 @@ class MemoryLock implements Lock {
     private timeout: number = 1000 * 30
   ) {}
 
-  async lock(requestRelease: RequestRelease): Promise<void> {
+  async lock(stopSignal: AbortSignal, requestRelease: RequestRelease): Promise<void> {
     const abortController = new AbortController()
-    const lock = await Promise.race([
-      this.waitTimeout(abortController.signal),
-      this.acquireLock(this.id, requestRelease, abortController.signal),
-    ])
+    const onAbort = () => {
+      abortController.abort()
+    }
+    stopSignal.addEventListener('abort', onAbort)
 
-    abortController.abort()
+    try {
+      const lock = await Promise.race([
+        this.waitTimeout(abortController.signal),
+        this.acquireLock(this.id, requestRelease, abortController.signal),
+      ])
 
-    if (!lock) {
-      throw ERRORS.ERR_LOCK_TIMEOUT
+      if (!lock) {
+        throw ERRORS.ERR_LOCK_TIMEOUT
+      }
+    } finally {
+      stopSignal.removeEventListener('abort', onAbort)
+      abortController.abort()
     }
   }
 
@@ -69,11 +76,11 @@ class MemoryLock implements Lock {
     requestRelease: RequestRelease,
     signal: AbortSignal
   ): Promise<boolean> {
-    if (signal.aborted) {
-      return false
-    }
-
     const lock = this.locker.locks.get(id)
+
+    if (signal.aborted) {
+      return typeof lock !== 'undefined'
+    }
 
     if (!lock) {
       const lock = {

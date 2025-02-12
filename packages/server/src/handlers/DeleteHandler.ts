@@ -1,6 +1,5 @@
 import {BaseHandler} from './BaseHandler'
-import {ERRORS, EVENTS} from '../constants'
-import {CancellationContext} from '../models'
+import {ERRORS, EVENTS, type CancellationContext} from '@tus/utils'
 
 import type http from 'node:http'
 
